@@ -84,22 +84,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - id: inventory-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.MIRROR_APP_ID }}
-          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
-          owner: ${{ matrix.owner }}
-          permission-contents: read
-
       - id: inventory
-        name: Find forks for this owner
-        env:
-          GH_TOKEN: ${{ steps.inventory-token.outputs.token }}
-          TARGET_OWNER: ${{ matrix.owner }}
+        name: Select forks for this owner
         run: |
-          repositories=$(gh api --paginate "orgs/$TARGET_OWNER/repos?type=all&per_page=100" \
-            --jq '.[] | select(.fork == true) | .name' | paste -sd, -)
+          repositories=$(jq -r --arg owner "${{ matrix.owner }}" \
+            '.[$owner] // [] | join(",")' .github/forks.json)
           echo "repositories=$repositories" >> "$GITHUB_OUTPUT"
 
       - id: write-token
@@ -117,6 +106,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.write-token.outputs.token }}
           TARGET_OWNER: ${{ matrix.owner }}
+          TARGET_REPOSITORIES: ${{ steps.inventory.outputs.repositories }}
           MAX_PARALLEL: "4"
         run: bash scripts/hard-reset-mirrors.sh
 

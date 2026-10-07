@@ -21,7 +21,9 @@ if [[ "$parallelism" -lt 1 || "$parallelism" -gt 8 ]]; then
   exit 2
 fi
 
-if [[ -n "$target_owner" ]]; then
+if [[ -n "${TARGET_REPOSITORIES:-}" ]]; then
+  repo_list=$(tr ',' '\n' <<<"$TARGET_REPOSITORIES" | sed "s#^#$target_owner/#")
+elif [[ -n "$target_owner" ]]; then
   repo_list=$(gh repo list "$target_owner" --fork --limit 1000 \
     --json nameWithOwner --jq '.[].nameWithOwner')
 else
