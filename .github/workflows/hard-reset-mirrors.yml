@@ -1,0 +1,125 @@
+name: Daily hard reset mirrors
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: daily-hard-reset-mirrors
+  cancel-in-progress: false
+
+jobs:
+  cadence:
+    if: ${{ vars.MIRROR_SYNC_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      due: ${{ steps.check.outputs.due }}
+    steps:
+      - id: check
+        name: Check four-day interval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "due=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/hard-reset-mirrors.yml/runs?per_page=20" \
+            --jq '.workflow_runs[] | [.id, .created_at] | @tsv')
+          previous_sync=""
+          while IFS=$'\t' read -r run_id created_at; do
+            [[ -z "$run_id" || "$run_id" == "$GITHUB_RUN_ID" ]] && continue
+            ran_sync=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name | startswith("sync (")) | select(.conclusion != "skipped")] | length')
+            if [[ "$ran_sync" -gt 0 ]]; then
+              previous_sync="$created_at"
+              break
+            fi
+          done <<< "$runs"
+
+          if [[ -z "$previous_sync" ]]; then
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          else
+            last_epoch=$(date -u -d "$previous_sync" +%s)
+            now_epoch=$(date -u +%s)
+            if (( now_epoch - last_epoch >= 345600 )); then
+              echo "due=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "due=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+  sync:
+    needs: cadence
+    if: ${{ vars.MIRROR_SYNC_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || needs.cadence.outputs.due == 'true') }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        owner:
+          - psy-repos-python
+          - psy-repos-go
+          - psy-repos-shell
+          - psy-repos-container
+          - psy-repos-typescript
+          - psy-repos-c
+          - psy-repos-rust
+          - psy-repos-react
+          - psy-repos-angular
+          - psy-repos-cpp
+          - psy-repos-javascript
+          - psy-repos-csharp
+          - psy-repos-linux
+          - psy-repos-vue
+          - psy-repos-svelte
+          - psy-repos-deno
+          - psy-repos-blockchain
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: inventory-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.MIRROR_APP_ID }}
+          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          permission-contents: read
+
+      - id: inventory
+        name: Find forks for this owner
+        env:
+          GH_TOKEN: ${{ steps.inventory-token.outputs.token }}
+          TARGET_OWNER: ${{ matrix.owner }}
+        run: |
+          repositories=$(gh repo list "$TARGET_OWNER" --fork --limit 1000 \
+            --json name --jq '.[].name' | paste -sd, -)
+          echo "repositories=$repositories" >> "$GITHUB_OUTPUT"
+
+      - id: write-token
+        if: ${{ steps.inventory.outputs.repositories != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.MIRROR_APP_ID }}
+          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          repositories: ${{ steps.inventory.outputs.repositories }}
+          permission-contents: write
+
+      - name: Reset mirror branches to upstream
+        if: ${{ steps.inventory.outputs.repositories != '' }}
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          TARGET_OWNER: ${{ matrix.owner }}
+          MAX_PARALLEL: "4"
+        run: bash scripts/hard-reset-mirrors.sh
+
+      - name: No accessible forks
+        if: ${{ steps.inventory.outputs.repositories == '' }}
+        run: echo "No accessible forks for ${{ matrix.owner }}."
