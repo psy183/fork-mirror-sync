@@ -128,7 +128,7 @@ process_repository() {
     -f "sha=$upstream_sha" -F force=true 2>&1); then
     printf 'reset\t%s\t%s\t%s\n' "$repository" "$base_branch" "$upstream_sha" >"$result_file"
   else
-    git_dir="$work_dir/git-${repository//\//--}"
+    git_dir="$results_dir/git-${repository//\//--}"
     if mkdir -p "$git_dir" && git -C "$git_dir" init -q 2>/dev/null; then
       git -C "$git_dir" remote add upstream "https://github.com/$parent.git" 2>/dev/null || true
       git -C "$git_dir" remote add origin "https://github.com/$repository.git" 2>/dev/null || true
