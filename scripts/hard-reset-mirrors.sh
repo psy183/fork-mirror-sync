@@ -69,6 +69,7 @@ process_repository() {
   local result_file
 
   result_file="$results_dir/${repository//\//--}.tsv"
+  detail=""
 
   if ! detail=$(gh api "repos/$repository" \
     --jq '[.fork, .archived, .default_branch, .parent.full_name, .parent.default_branch] | @tsv' 2>&1); then
@@ -129,20 +130,24 @@ process_repository() {
     printf 'reset\t%s\t%s\t%s\n' "$repository" "$base_branch" "$upstream_sha" >"$result_file"
   else
     git_dir="$results_dir/git-${repository//\//--}"
-    if mkdir -p "$git_dir" && git -C "$git_dir" init -q 2>/dev/null; then
+    if mkdir -p "$git_dir" && git -C "$git_dir" init -q 2>"$results_dir/git-init-${repository//\//--}.err"; then
       git -C "$git_dir" remote add upstream "https://github.com/$parent.git" 2>/dev/null || true
       git -C "$git_dir" remote add origin "https://github.com/$repository.git" 2>/dev/null || true
-      if git -C "$git_dir" -c credential.helper= fetch --depth=1 upstream \
-          "refs/heads/$upstream_branch:refs/remotes/upstream/mirror-sync" >/dev/null 2>&1 &&
-        GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 \
+      if ! git -C "$git_dir" -c credential.helper= fetch --depth=1 upstream \
+          "refs/heads/$upstream_branch:refs/remotes/upstream/mirror-sync" >/dev/null 2>"$git_dir/fetch.err"; then
+        detail="git fetch: $(tail -n 1 "$git_dir/fetch.err")"
+      elif ! GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 \
           git -C "$git_dir" -c credential.helper= push --force origin \
-            "refs/remotes/upstream/mirror-sync:refs/heads/$base_branch" >/dev/null 2>&1; then
-        printf 'reset\t%s\t%s\t%s\tgit-fallback\n' "$repository" "$base_branch" "$upstream_sha" >"$result_file"
+            "refs/remotes/upstream/mirror-sync:refs/heads/$base_branch" >/dev/null 2>"$git_dir/push.err"; then
+        detail="git push: $(tail -n 1 "$git_dir/push.err")"
       else
-        printf 'error\t%s\treset API: %s; git fallback also failed\n' "$repository" "$message" >"$result_file"
+        printf 'reset\t%s\t%s\t%s\tgit-fallback\n' "$repository" "$base_branch" "$upstream_sha" >"$result_file"
       fi
     else
-      printf 'error\t%s\treset API: %s; cannot initialize git fallback\n' "$repository" "$message" >"$result_file"
+      detail="git init: $(tail -n 1 "$results_dir/git-init-${repository//\//--}.err" 2>/dev/null || true)"
+    fi
+    if [[ -n "$detail" ]]; then
+      printf 'error\t%s\treset API: %s; %s\n' "$repository" "$message" "$detail" >"$result_file"
     fi
   fi
 }
