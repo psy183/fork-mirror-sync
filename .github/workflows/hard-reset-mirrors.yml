@@ -98,8 +98,8 @@ jobs:
           GH_TOKEN: ${{ steps.inventory-token.outputs.token }}
           TARGET_OWNER: ${{ matrix.owner }}
         run: |
-          repositories=$(gh repo list "$TARGET_OWNER" --fork --limit 1000 \
-            --json name --jq '.[].name' | paste -sd, -)
+          repositories=$(gh api --paginate "orgs/$TARGET_OWNER/repos?type=all&per_page=100" \
+            --jq '.[] | select(.fork == true) | .name' | paste -sd, -)
           echo "repositories=$repositories" >> "$GITHUB_OUTPUT"
 
       - id: write-token
